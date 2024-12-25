@@ -8,12 +8,27 @@ import swaggerUI from 'swagger-ui-express';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const videosDir = path.join(__dirname, '..', 'videos');
+const videosDir = path.join(__dirname, 'videos'); // Cambiado a directorio local
 
-// Crear directorio de videos si no existe
+// Agregar log para debug
+console.log('Directorio de videos:', videosDir);
+
 if (!fs.existsSync(videosDir)) {
+  console.log('Creando directorio de videos...');
   fs.mkdirSync(videosDir, { recursive: true });
 }
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+const HOST = '0.0.0.0'; // Asegura que escuche en todas las interfaces de red
+
+// Configurar CORS específicamente para tu frontend
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*', // URL de tu frontend
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Métodos permitidos
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 
 const swaggerOptions = {
   definition: {
@@ -25,7 +40,8 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: 'http://localhost:5000',
+        url: `http://${process.env.API_HOST || 'localhost'}:${process.env.PORT || 5000}`,
+        description: 'Servidor de Videos'
       },
     ],
   },
@@ -33,12 +49,6 @@ const swaggerOptions = {
 };
 
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
-
-const app = express();
-const PORT = 5000;
-const HOST = '0.0.0.0';
-
-app.use(cors());
 app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(swaggerDocs));
 
 /**
@@ -49,21 +59,16 @@ app.use('/api-docs', swaggerUI.serve, swaggerUI.setup(swaggerDocs));
  *     responses:
  *       200:
  *         description: Lista de videos
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: string
- *       500:
- *         description: Error al leer los videos
  */
 app.get('/api/videos', (req, res) => {
+  console.log('Buscando videos en:', videosDir); // Agregar log para debug
   fs.readdir(videosDir, (err, files) => {
     if (err) {
+      console.error('Error al leer directorio:', err); // Agregar log para debug
       return res.status(500).json({ error: 'Error al leer los videos' });
     }
     const videos = files.filter(file => file.match(/\.(mp4|mkv|avi)$/));
+    console.log('Videos encontrados:', videos); // Agregar log para debug
     res.json(videos);
   });
 });
@@ -72,34 +77,27 @@ app.get('/api/videos', (req, res) => {
  * @swagger
  * /api/video/{filename}:
  *   get:
- *     summary: Obtiene un video específico para streaming
+ *     summary: Obtiene un video específico
  *     parameters:
  *       - in: path
  *         name: filename
  *         required: true
- *         description: Nombre del archivo de video
+ *         description: Nombre del archivo
  *         schema:
  *           type: string
  *     responses:
  *       200:
  *         description: Stream del video
- *         content:
- *           video/mp4:
- *             schema:
- *               type: string
- *               format: binary
- *       404:
- *         description: Video no encontrado
  */
 app.get('/api/video/:filename', (req, res) => {
   try {
-    // Eliminar cualquier comilla del nombre del archivo
     const filename = decodeURIComponent(req.params.filename).replace(/["']/g, '');
-    const videoPath = path.join(__dirname, '..', 'videos', filename);
+    const videoPath = path.join(videosDir, filename);
+    
+    console.log('Intentando acceder al video:', videoPath); // Agregar log para debug
 
-    // Verificar si el archivo existe
     if (!fs.existsSync(videoPath)) {
-      console.error('Video no encontrado:', videoPath);
+      console.log('Video no encontrado:', videoPath); // Agregar log para debug
       return res.status(404).json({ error: 'Video no encontrado' });
     }
 
@@ -113,40 +111,29 @@ app.get('/api/video/:filename', (req, res) => {
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize-1;
       const chunksize = (end-start)+1;
       
-      try {
-        const file = fs.createReadStream(videoPath, {start, end});
-        const head = {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunksize,
-          'Content-Type': 'video/mp4',
-        };
-        res.writeHead(206, head);
-        file.pipe(res);
-      } catch (streamError) {
-        console.error('Error en streaming:', streamError);
-        res.status(500).json({ error: 'Error al transmitir el video' });
-      }
+      const file = fs.createReadStream(videoPath, {start, end});
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
     } else {
-      try {
-        const head = {
-          'Content-Length': fileSize,
-          'Content-Type': 'video/mp4',
-        };
-        res.writeHead(200, head);
-        fs.createReadStream(videoPath).pipe(res);
-      } catch (streamError) {
-        console.error('Error en streaming:', streamError);
-        res.status(500).json({ error: 'Error al transmitir el video' });
-      }
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(videoPath).pipe(res);
     }
   } catch (error) {
-    console.error('Error:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`Swagger disponible en http://localhost:${PORT}/api-docs`);
+  console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
+  console.log(`Swagger disponible en http://${HOST}:${PORT}/api-docs`);
 });
